@@ -1,0 +1,23 @@
+# Build output
+build/
+Output/
+*.obj
+*.res
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
+
+# Ship the ready-to-use installer
+!MutexTweaker_Setup.exe
+
+# IDE / OS
+.vs/
+.vscode/
+*.sln
+*.vcxproj*
+*.user
+Thumbs.db
+desktop.ini
