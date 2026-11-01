@@ -1,4 +1,4 @@
-﻿#include <windows.h>
+#include <windows.h>
 #include <objidl.h>
 #include <gdiplus.h>
 #include <commctrl.h>
@@ -24,6 +24,7 @@ using namespace Gdiplus;
 #define IDC_SELECTALL 1004
 #define IDC_CLEARALL  1005
 #define IDC_APPLYALL  1006
+#define IDC_RESTORECHK 1007
 
 #define WM_APP_RESTORE_DONE (WM_APP + 1)
 
@@ -46,6 +47,7 @@ static HWND  g_btnApply = nullptr;
 static HWND  g_btnApplyAll = nullptr;
 static HWND  g_btnAll = nullptr;
 static HWND  g_btnNone = nullptr;
+static HWND  g_chkRestore = nullptr;
 static std::vector<std::string>  g_ids;
 static std::vector<std::wstring> g_names;
 static std::vector<bool>         g_reboot;
@@ -57,6 +59,7 @@ static bool         g_admin = false;
 static bool         g_busy = false;
 static bool         g_applyAll = false;
 static bool         g_rpCreated = false;
+static bool         g_createRp = true;
 static volatile LONG g_rpResult = 0;
 static wchar_t      g_rpError[512] = {};
 
@@ -288,6 +291,61 @@ static void DrawButton(const DRAWITEMSTRUCT* dis)
     g.DrawString(text, -1, g_fButton, r, &fmt, &b);
 }
 
+// ---------- Отрисовка чекбокса точки восстановления ----------
+static void DrawRestoreCheck(const DRAWITEMSTRUCT* dis)
+{
+    Graphics g(dis->hDC);
+    g.SetSmoothingMode(SmoothingModeAntiAlias);
+    g.SetTextRenderingHint(TextRenderingHintClearTypeGridFit);
+
+    int w = dis->rcItem.right - dis->rcItem.left;
+    int h = dis->rcItem.bottom - dis->rcItem.top;
+
+    // Фон под контролом совпадает с нижней частью градиента окна.
+    SolidBrush bg(Color(255, 17, 17, 25));
+    g.FillRectangle(&bg, 0, 0, w, h);
+
+    bool disabled = (dis->itemState & ODS_DISABLED) != 0;
+    bool checked = g_createRp;
+
+    const float box = 17.0f;
+    float by = (h - box) / 2.0f;
+    RectF boxRect(1.0f, by, box, box);
+
+    Color boxFill = checked ? kAccent : Color(255, 30, 30, 42);
+    Color boxBorder = checked ? kAccentHot : kCardBorder;
+    if (disabled)
+    {
+        boxFill = checked ? Color(255, 74, 66, 130) : Color(255, 26, 26, 34);
+        boxBorder = Color(255, 48, 48, 60);
+    }
+    FillRound(g, boxRect, 4.0f, boxFill, boxBorder);
+
+    if (checked)
+    {
+        Pen pen(Color(255, 255, 255, 255), 2.0f);
+        pen.SetStartCap(LineCapRound);
+        pen.SetEndCap(LineCapRound);
+        PointF p1(boxRect.X + 4.0f, boxRect.Y + 8.5f);
+        PointF p2(boxRect.X + 7.5f, boxRect.Y + 12.0f);
+        PointF p3(boxRect.X + 13.0f, boxRect.Y + 5.0f);
+        g.DrawLine(&pen, p1, p2);
+        g.DrawLine(&pen, p2, p3);
+    }
+
+    wchar_t text[128] = {};
+    GetWindowTextW(dis->hwndItem, text, 128);
+    Color textColor = disabled ? Color(255, 120, 120, 136) : Color(255, 255, 255, 255);
+    SolidBrush tb(textColor);
+    StringFormat fmt;
+    fmt.SetAlignment(StringAlignmentNear);
+    fmt.SetLineAlignment(StringAlignmentCenter);
+    fmt.SetTrimming(StringTrimmingEllipsisCharacter);
+    RectF tr(boxRect.X + box + 8.0f, 0.0f,
+             (REAL)w - (boxRect.X + box + 8.0f) - 2.0f, (REAL)h);
+    g.DrawString(text, -1, g_fSub, tr, &fmt, &tb);
+}
+
 // ---------- Отрисовка окна ----------
 static void PaintWindow(HWND hWnd, HDC hdc)
 {
@@ -356,11 +414,11 @@ static void PaintWindow(HWND hWnd, HDC hdc)
     }
 
     // ---- Статус ----
-    DrawStr(g, g_status, g_fSmall, g_statusColor, 32.0f, (float)H - 34.0f);
+    DrawStr(g, g_status, g_fSmall, g_statusColor, 32.0f, (float)H - 52.0f);
 
     // разделительная линия снизу
     Pen line(Color(255, 32, 32, 44), 1.0f);
-    g.DrawLine(&line, 30.0f, (REAL)H - 48.0f, (REAL)W - 30.0f, (REAL)H - 48.0f);
+    g.DrawLine(&line, 30.0f, (REAL)H - 96.0f, (REAL)W - 30.0f, (REAL)H - 96.0f);
 }
 
 // ---------- Загрузка твиков из ядра ----------
@@ -452,6 +510,7 @@ static void SetBusy(bool busy)
     EnableWindow(g_btnApplyAll, !busy);
     EnableWindow(g_btnAll, !busy);
     EnableWindow(g_btnNone, !busy);
+    EnableWindow(g_chkRestore, !busy);
     EnableWindow(g_list, !busy);
 }
 
@@ -466,7 +525,7 @@ static DWORD WINAPI RestorePointThread(LPVOID)
     return 0;
 }
 
-// Проверяет выбор, спрашивает подтверждение и запускает создание точки восстановления.
+// Проверяет выбор, спрашивает подтверждение и при необходимости создаёт точку восстановления.
 static void StartApply(HWND hWnd, bool all)
 {
     if (g_busy) return;
@@ -502,23 +561,47 @@ static void StartApply(HWND hWnd, bool all)
         return;
     }
 
+    if (g_chkRestore)
+        InvalidateRect(g_chkRestore, nullptr, TRUE);
+
     wchar_t msg[900];
-    if (reboot)
+    if (g_createRp)
     {
-        wsprintfW(msg,
-            L"Перед изменениями будет создана точка восстановления системы.\n"
-            L"Это может занять до минуты.\n\n"
-            L"Затем будет применено твиков: %d.\n"
-            L"Часть изменений вступит в силу только после перезагрузки.\n\n"
-            L"Продолжить?", selected);
+        if (reboot)
+        {
+            wsprintfW(msg,
+                L"Будет создана точка восстановления системы.\n"
+                L"Это может занять до минуты.\n\n"
+                L"Затем будет применено твиков: %d.\n"
+                L"Часть изменений вступит в силу только после перезагрузки.\n\n"
+                L"Продолжить?", selected);
+        }
+        else
+        {
+            wsprintfW(msg,
+                L"Будет создана точка восстановления системы.\n"
+                L"Это может занять до минуты.\n\n"
+                L"Затем будет применено твиков: %d.\n\n"
+                L"Продолжить?", selected);
+        }
     }
     else
     {
-        wsprintfW(msg,
-            L"Перед изменениями будет создана точка восстановления системы.\n"
-            L"Это может занять до минуты.\n\n"
-            L"Затем будет применено твиков: %d.\n\n"
-            L"Продолжить?", selected);
+        if (reboot)
+        {
+            wsprintfW(msg,
+                L"Точка восстановления создаваться НЕ будет.\n\n"
+                L"Будет применено твиков: %d.\n"
+                L"Часть изменений вступит в силу только после перезагрузки.\n\n"
+                L"Продолжить?", selected);
+        }
+        else
+        {
+            wsprintfW(msg,
+                L"Точка восстановления создаваться НЕ будет.\n\n"
+                L"Будет применено твиков: %d.\n\n"
+                L"Продолжить?", selected);
+        }
     }
 
     if (MessageBoxW(hWnd, msg, L"Применение твиков", MB_YESNO | MB_ICONWARNING) != IDYES)
@@ -531,6 +614,12 @@ static void StartApply(HWND hWnd, bool all)
     g_rpCreated = false;
     g_rpError[0] = L'\0';
     InterlockedExchange((volatile LONG*)&g_rpResult, 0);
+
+    if (!g_createRp)
+    {
+        ApplySelected(hWnd, all);
+        return;
+    }
 
     SetBusy(true);
     SetStatus(L"Создаю точку восстановления системы… это может занять до минуты",
@@ -609,6 +698,8 @@ static void ApplySelected(HWND hWnd, bool all)
         if (g_rpCreated) lstrcatW(buf, L" · точка восстановления создана");
         SetStatus(buf, kErr);
     }
+
+    SetBusy(false);
 
     if (reboot && applied > 0)
     {
@@ -695,7 +786,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         g_btnApplyAll = CreateWindowExW(0, L"BUTTON", L"Применить всё",
             WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 10, 10, hWnd, (HMENU)(ULONG_PTR)IDC_APPLYALL, hi, nullptr);
 
-        break;
+        g_chkRestore = CreateWindowExW(0, L"BUTTON", L"Сделать точку восстановления",
+            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 10, 10, hWnd, (HMENU)(ULONG_PTR)IDC_RESTORECHK, hi, nullptr);
+        if (g_hListFont)
+            SendMessageW(g_chkRestore, WM_SETFONT, (WPARAM)g_hListFont, TRUE);
     }
 
     case WM_SIZE:
@@ -703,7 +797,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         int W = LOWORD(lParam), H = HIWORD(lParam);
         int left = 30, right = W - 30;
         int listTop = 250;
-        int listH = H - 250 - 110;
+        int listH = H - 250 - 120;
 
         if (g_list)
             MoveWindow(g_list, left, listTop, right - left, listH, TRUE);
@@ -725,6 +819,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             MoveWindow(g_btnApplyAll, right - 390, listTop + listH + 18, 170, 38, TRUE);
         if (g_btnApply)
             MoveWindow(g_btnApply, right - 210, listTop + listH + 18, 210, 38, TRUE);
+        if (g_chkRestore)
+            MoveWindow(g_chkRestore, left, listTop + listH + 68, 420, 22, TRUE);
 
         InvalidateRect(hWnd, nullptr, TRUE);
         break;
@@ -744,7 +840,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_DRAWITEM:
     {
-        DrawButton((const DRAWITEMSTRUCT*)lParam);
+        const DRAWITEMSTRUCT* dis = (const DRAWITEMSTRUCT*)lParam;
+        if (dis->CtlID == IDC_RESTORECHK)
+            DrawRestoreCheck(dis);
+        else
+            DrawButton(dis);
         return TRUE;
     }
 
@@ -788,6 +888,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             int n = ListView_GetItemCount(g_list);
             for (int i = 0; i < n; ++i)
                 ListView_SetCheckState(g_list, i, id == IDC_SELECTALL);
+            return 0;
+        }
+
+        if (id == IDC_RESTORECHK && HIWORD(wParam) == BN_CLICKED)
+        {
+            g_createRp = !g_createRp;
+            InvalidateRect(g_chkRestore, nullptr, TRUE);
             return 0;
         }
 

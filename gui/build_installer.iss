@@ -2,7 +2,7 @@
 ; Build: "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" build_installer.iss
 
 #define MyAppName "MutexTweaker"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "MutexTweaker"
 #define MyAppExeName "MutexTweakerGUI.exe"
 

@@ -35,5 +35,20 @@ if defined VSDIR if exist "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" (
     call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul
     exit /b 0
 )
+for %%d in (
+    "%ProgramFiles%\Microsoft Visual Studio\2022\Community"
+    "%ProgramFiles%\Microsoft Visual Studio\2022\Professional"
+    "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise"
+    "%ProgramFiles%\Microsoft Visual Studio\2022\BuildTools"
+    "%ProgramFiles(x86)%\Microsoft Visual Studio\2019\Community"
+    "%ProgramFiles(x86)%\Microsoft Visual Studio\2019\Professional"
+    "%ProgramFiles(x86)%\Microsoft Visual Studio\2019\Enterprise"
+    "%ProgramFiles(x86)%\Microsoft Visual Studio\2019\BuildTools"
+) do (
+    if exist "%%~d\VC\Auxiliary\Build\vcvars64.bat" (
+        call "%%~d\VC\Auxiliary\Build\vcvars64.bat" >nul
+        exit /b 0
+    )
+)
 if exist "C:\Program1\VC\Auxiliary\Build\vcvars64.bat" call "C:\Program1\VC\Auxiliary\Build\vcvars64.bat" >nul
 exit /b 0
