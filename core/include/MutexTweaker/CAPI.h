@@ -20,6 +20,10 @@ WO_API int WO_ApplyTweak(const char* id);
 WO_API int WO_ApplyAllSafe();
 WO_API int WO_ApplyByCategory(int cat);
 
+// Создаёт точку восстановления. 1 — успех, 0 — ошибка (текст в errorBuf).
+WO_API int WO_CreateRestorePoint(const wchar_t* description,
+                                 wchar_t* errorBuf, int errorBufLen);
+
 WO_API const wchar_t* WO_GetCpuName();
 WO_API const wchar_t* WO_GetGpuName();
 WO_API double WO_GetRamGb();
